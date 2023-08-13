@@ -1,6 +1,6 @@
-use std::{str, net::SocketAddrV4};
+use std::{net::SocketAddrV4, str};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// All possible messages which can be sent from or to all apps
 #[derive(Serialize, Deserialize, Debug)]
@@ -34,5 +34,5 @@ pub enum PunchError {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PunchMessage {
     Peer,
-    STUN(SocketAddrV4)
+    STUN(SocketAddrV4),
 }

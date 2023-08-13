@@ -1,4 +1,7 @@
-use std::{fmt, net::{SocketAddr, UdpSocket, SocketAddrV4}};
+use std::{
+    fmt,
+    net::{SocketAddrV4, UdpSocket},
+};
 
 use crate::messages::UDPMessage;
 
@@ -10,7 +13,7 @@ pub fn die<E: fmt::Debug>(error: E) -> ! {
     std::process::exit(1);
 }
 
-/// Sends an UDP packet from a socket into an
+/// Sends an UDP packet from a socket to address
 pub fn send_udp_packet(msg: &UDPMessage, socket: &UdpSocket, addr: &SocketAddrV4) {
     if let Ok(write_buffer) = postcard::to_vec::<&UDPMessage, STUN_BUFFER_SIZE>(&msg) {
         // Send it

@@ -58,14 +58,54 @@ pub fn spawn_stun(listen: &str) -> ! {
                 }
                 // Add it to server list
                 servers.insert(service_name.to_owned(), addr);
+                log::debug!("Added {} for {}", service_name, addr);
                 // Send back the success message
-                send_udp_packet(
-                    &UDPMessage::Ok,
-                    &socket,
-                    &addr,
-                );
+                send_udp_packet(&UDPMessage::Ok, &socket, &addr);
             }
-            UDPMessage::Client { service_name } => {}
+            UDPMessage::Client { service_name } => {
+                // Check if the service name exists
+                match servers.remove(service_name) {
+                    Some(server_address) => {
+                        log::debug!(
+                            "Matching client {} with server {} via key {}",
+                            addr,
+                            server_address,
+                            service_name
+                        );
+                        // Send message to server
+                        send_udp_packet(
+                            &UDPMessage::Punch {
+                                0: PunchMessage::STUN { 0: addr },
+                            },
+                            &socket,
+                            &server_address,
+                        );
+                        // Send message to client
+                        send_udp_packet(
+                            &UDPMessage::Punch {
+                                0: PunchMessage::STUN { 0: server_address },
+                            },
+                            &socket,
+                            &addr,
+                        );
+                    }
+                    // No server was found!
+                    None => {
+                        log::warn!(
+                            "{} requested for {} which does not exist",
+                            addr,
+                            service_name
+                        );
+                        send_udp_packet(
+                            &UDPMessage::Error {
+                                0: PunchError::NoServer,
+                            },
+                            &socket,
+                            &addr,
+                        );
+                    }
+                };
+            }
             _ => {}
         };
     }
