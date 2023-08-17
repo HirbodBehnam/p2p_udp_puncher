@@ -9,6 +9,7 @@ use crate::{
     util::{die, send_udp_packet, STUN_BUFFER_SIZE},
 };
 
+/// Spawn the STUN server which connects all clients and servers together
 pub fn spawn_stun(listen: &str) -> ! {
     // Bind on address
     let socket = match UdpSocket::bind(listen) {
@@ -34,12 +35,13 @@ pub fn spawn_stun(listen: &str) -> ! {
             }
         };
         // Parse the packet
-        let packet = postcard::from_bytes::<UDPMessage<'_>>(&buffer[..len]);
-        if let Err(err) = packet {
-            log::warn!("Got invalid packet from {}: {}", addr, err);
-            continue;
-        }
-        let packet = packet.unwrap();
+        let packet = match postcard::from_bytes::<UDPMessage<'_>>(&buffer[..len]) {
+            Err(err) => {
+                log::warn!("Got invalid packet from {}: {}", addr, err);
+                continue;
+            }
+            Ok(pkt) => pkt,
+        };
         // Check the request
         match packet {
             UDPMessage::Server { service_name } => {
