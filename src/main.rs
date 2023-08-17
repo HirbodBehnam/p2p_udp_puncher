@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod arguments;
+mod client;
 mod messages;
 mod server;
 mod stun;
@@ -25,7 +26,13 @@ fn main() {
             listen,
             stun,
             service,
-        } => todo!(),
+        } => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                client::spawn_client(&listen, &stun, &service).await;
+            }),
         arguments::Commands::STUN { listen } => {
             stun::spawn_stun(&listen);
         }

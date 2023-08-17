@@ -23,7 +23,7 @@ pub enum UDPMessage<'a> {
     Ok,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum PunchError {
     /// There is another server with this key
     DuplicateKey,
@@ -31,7 +31,7 @@ pub enum PunchError {
     NoServer,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum PunchMessage {
     Peer,
     STUN(SocketAddrV4),

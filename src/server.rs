@@ -5,14 +5,22 @@ use tokio::net::UdpSocket;
 
 use crate::{
     messages::{PunchMessage, UDPMessage},
-    util::{die, STUN_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, forward_udp},
+    util::{die, forward_udp, LOCAL_UDP_BIND_ADDRESS, STUN_BUFFER_SIZE},
 };
 
 /// Spawn a webserver which gets incoming connections from STUN server
-pub async fn spawn_server(forward: &str, stun: &str, service: &str) {
+pub async fn spawn_server(forward: &str, stun: &str, service: &str) -> ! {
     // Parse socket addresses
-    let forward_address = forward.to_socket_addrs().unwrap().next().unwrap();
-    let stun_address = stun.to_socket_addrs().unwrap().next().unwrap();
+    let forward_address = forward
+        .to_socket_addrs()
+        .expect("cannot parse forward address")
+        .next()
+        .expect("cannot parse forward address");
+    let stun_address = stun
+        .to_socket_addrs()
+        .expect("cannot parse STUN address")
+        .next()
+        .expect("cannot parse STUN address");
     let stun_address = match stun_address {
         SocketAddr::V4(v4) => v4,
         SocketAddr::V6(_) => die("stun address cannot be IPv6"),
@@ -26,7 +34,7 @@ pub async fn spawn_server(forward: &str, stun: &str, service: &str) {
         };
         log::debug!("Started a socket on {}", socket.local_addr().unwrap());
         // Connect to stun server and get the client address
-        let client_addr = stun_handshake(&socket, stun_address, service).await;
+        let client_addr = stun_handshake(&socket, &stun_address, service).await;
         // Now punch!
         tokio::task::spawn(async move {
             if let Err(err) = punch(socket, client_addr, forward_address).await {
@@ -36,15 +44,18 @@ pub async fn spawn_server(forward: &str, stun: &str, service: &str) {
     }
 }
 
-async fn stun_handshake(socket: &UdpSocket, stun: SocketAddrV4, service: &str) -> SocketAddrV4 {
+async fn stun_handshake(socket: &UdpSocket, stun: &SocketAddrV4, service: &str) -> SocketAddrV4 {
     let mut buf = [0; STUN_BUFFER_SIZE];
     // Send server hello
-    let server_hello = UDPMessage::Server {
-        service_name: service,
-    };
     log::debug!("Sending server hello");
-    let write_buffer = postcard::to_slice(&server_hello, &mut buf).unwrap();
-    socket.send_to(&write_buffer, &stun).await.unwrap();
+    let write_buffer = postcard::to_slice(
+        &UDPMessage::Server {
+            service_name: service,
+        },
+        &mut buf,
+    )
+    .unwrap();
+    socket.send_to(&write_buffer, stun).await.unwrap();
     // Get the answer
     log::debug!("Waiting for STUN ack");
     let (read_len, _) = socket.recv_from(&mut buf).await.unwrap();
@@ -106,7 +117,10 @@ async fn punch(
     let (packet_length, _) = socket.recv_from(&mut punch_buffer).await?;
     let client_punch = postcard::from_bytes::<UDPMessage<'_>>(&punch_buffer[..packet_length])?;
     if !matches!(client_punch, UDPMessage::Punch(PunchMessage::Peer)) {
-        bail!("Invalid packet received from client peer: {:?}", client_punch);
+        bail!(
+            "Invalid packet received from client peer: {:?}",
+            client_punch
+        );
     }
     // Send back a packet
     log::debug!("Sending handshake step 3");
