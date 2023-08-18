@@ -55,11 +55,11 @@ pub async fn forward_udp(
     Ok(())
 }
 
-async fn copy_udp(a: &tokio::net::UdpSocket, b: &tokio::net::UdpSocket) -> anyhow::Result<()> {
+async fn copy_udp(src: &tokio::net::UdpSocket, dest: &tokio::net::UdpSocket) -> anyhow::Result<()> {
     let mut buffer = [0; FORWARD_BUFFER_SIZE];
     loop {
-        let read = a.recv(&mut buffer).await?;
-        b.send(&buffer[..read]).await?;
+        let read = src.recv(&mut buffer).await?;
+        dest.send(&buffer[..read]).await?;
         tokio::task::yield_now().await;
     }
 }

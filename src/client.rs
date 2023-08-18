@@ -24,15 +24,15 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
         SocketAddr::V4(v4) => v4,
         SocketAddr::V6(_) => die("stun address cannot be IPv6"),
     };
-    // Listen for incoming connections
-    let listener_socket: &'static mut UdpSocket = Box::leak(Box::new(
+    // Listen for incoming connections. We leak this socket because its open until the end of program
+    let listener_socket: &'static UdpSocket = Box::leak(Box::new(
         UdpSocket::bind(listen)
             .await
             .expect("cannot bind to local address"),
     ));
     let mut buffer = [0; FORWARD_BUFFER_SIZE];
     // A map from remote address to outbound sockets
-    let mut connection_map: HashMap<SocketAddr, UdpSocket> = HashMap::new();
+    let mut connection_map: HashMap<SocketAddr, Arc<UdpSocket>> = HashMap::new();
     // In a loop wait for connections and forward them
     loop {
         // Wait for packets...
@@ -55,11 +55,30 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
         }
         // Otherwise, we need to punch!
         log::info!("New connection from {}", addr);
-        let server_socket = stun_handshake(&stun_address, service).await;
+        let server_socket = Arc::new(punch(&stun_address, service).await);
+        log::info!(
+            "{} now is sending packets to {}",
+            addr,
+            server_socket.peer_addr().unwrap()
+        );
+        // Register the socket
+        connection_map.insert(addr, server_socket.clone());
+        // Create a thread to watch incoming connections
+        tokio::task::spawn(async move {
+            let mut buffer = [0; FORWARD_BUFFER_SIZE];
+            loop {
+                let read = server_socket.recv(&mut buffer).await?;
+                listener_socket.send_to(&buffer[..read], addr).await?;
+                tokio::task::yield_now().await;
+            }
+            // Read here: https://rust-lang.github.io/async-book/07_workarounds/02_err_in_async_blocks.html
+            #[allow(unreachable_code)]
+            tokio::io::Result::Ok(())
+        });
     }
 }
 
-async fn stun_handshake(stun: &SocketAddrV4, service: &str) -> UdpSocket {
+async fn punch(stun: &SocketAddrV4, service: &str) -> UdpSocket {
     let mut buffer = [0; STUN_BUFFER_SIZE];
     // At first create a socket
     let socket = UdpSocket::bind(LOCAL_UDP_BIND_ADDRESS)
