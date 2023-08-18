@@ -1,7 +1,7 @@
 use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 
 use anyhow::bail;
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket, task, time, select};
 
 use crate::{
     messages::{PunchMessage, UDPMessage},
@@ -71,12 +71,29 @@ async fn stun_handshake(socket: &UdpSocket, stun: &SocketAddrV4, service: &str) 
         ));
     }
     log::info!("Server registered {}", socket.local_addr().unwrap());
-    // Wait for punch
-    // TODO: keep alive
-    let (read_len, _) = socket.recv_from(&mut buf).await.unwrap();
-    let stun_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buf[..read_len]) {
-        Err(err) => die(format!("Got invalid packet from STUN server: {}", err)),
-        Ok(pkt) => pkt,
+    // Keep alive to tell the NAT to keep the state.
+    // This method should never return
+    let keep_alive = async {
+        let keep_alive_buffer = postcard::to_vec::<UDPMessage<'_>, STUN_BUFFER_SIZE>(&UDPMessage::KeepAlive).unwrap();
+        loop {
+            time::sleep(time::Duration::from_secs(1)).await;
+            log::trace!("Sending keep alive from {}", socket.local_addr().unwrap());
+            if socket.send_to(&keep_alive_buffer, stun).await.is_err() {
+                break;
+            }
+        }
+    };
+    // Wait for punch and poll the keep alive
+    let stun_punch;
+    select! {
+        () = keep_alive => unreachable!(),
+        recv_result = socket.recv_from(&mut buf) => {
+            let (read_len, _) = recv_result.unwrap();
+            stun_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buf[..read_len]) {
+                Err(err) => die(format!("Got invalid packet from STUN server: {}", err)),
+                Ok(pkt) => pkt,
+            };
+        },
     };
     // Parse packet
     if let UDPMessage::Punch(p) = &stun_punch {
@@ -135,7 +152,7 @@ async fn punch(
     // Now dial the destination
     let local_socket = UdpSocket::bind(LOCAL_UDP_BIND_ADDRESS).await?;
     // Now proxy data
-    tokio::task::spawn(async move {
+    task::spawn(async move {
         if let Err(err) = forward_udp(socket, local_socket, other_peer, forward_address).await {
             log::error!("Cannot forward: {}", err);
         }
