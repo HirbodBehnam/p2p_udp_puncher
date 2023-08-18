@@ -30,6 +30,7 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
             .await
             .expect("cannot bind to local address"),
     ));
+    log::info!("Listening on {}", listener_socket.local_addr().unwrap());
     let mut buffer = [0; FORWARD_BUFFER_SIZE];
     // A map from remote address to outbound sockets
     let mut connection_map: HashMap<SocketAddr, Arc<UdpSocket>> = HashMap::new();
@@ -61,9 +62,11 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
             addr,
             server_socket.peer_addr().unwrap()
         );
+        // Send the first packet we just got
+        let _ = server_socket.send(&buffer[..read_bytes]).await; // fuck errors
         // Register the socket
         connection_map.insert(addr, server_socket.clone());
-        // Create a thread to watch incoming connections
+        // Create a thread to watch incoming packets
         tokio::task::spawn(async move {
             let mut buffer = [0; FORWARD_BUFFER_SIZE];
             loop {

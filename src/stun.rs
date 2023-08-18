@@ -6,26 +6,21 @@ use std::{
 
 use crate::{
     messages::{PunchError, PunchMessage, UDPMessage},
-    util::{die, send_udp_packet, STUN_BUFFER_SIZE},
+    util::{send_udp_packet, STUN_BUFFER_SIZE},
 };
 
 /// Spawn the STUN server which connects all clients and servers together
 pub fn spawn_stun(listen: &str) -> ! {
     // Bind on address
-    let socket = match UdpSocket::bind(listen) {
-        Ok(s) => s,
-        Err(err) => die(err),
-    };
+    let socket = UdpSocket::bind(listen).expect("cannot bind UDP socket");
+    log::info!("Listening on {}", socket.local_addr().unwrap());
     // Setup variables
     let mut buffer = [0; STUN_BUFFER_SIZE];
     let mut servers: HashMap<String, SocketAddrV4> = HashMap::new();
     // Wait for clients and servers
     loop {
         // Read the first packet
-        let (len, addr) = match socket.recv_from(&mut buffer) {
-            Ok(s) => s,
-            Err(err) => die(err),
-        };
+        let (len, addr) = socket.recv_from(&mut buffer).expect("cannot receive datagrams");
         // Ignore if this is IPv6
         let addr = match addr {
             SocketAddr::V4(v4) => v4,
