@@ -1,11 +1,11 @@
 use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 
 use anyhow::bail;
-use tokio::{net::UdpSocket, task, time, select};
+use tokio::{net::UdpSocket, select, task, time};
 
 use crate::{
     messages::{PunchMessage, UDPMessage},
-    util::{die, forward_udp, LOCAL_UDP_BIND_ADDRESS, STUN_BUFFER_SIZE},
+    util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, SOCKET_TIMEOUT, STUN_BUFFER_SIZE},
 };
 
 /// Spawn a webserver which gets incoming connections from STUN server
@@ -74,7 +74,8 @@ async fn stun_handshake(socket: &UdpSocket, stun: &SocketAddrV4, service: &str) 
     // Keep alive to tell the NAT to keep the state.
     // This method should never return
     let keep_alive = async {
-        let keep_alive_buffer = postcard::to_vec::<UDPMessage<'_>, STUN_BUFFER_SIZE>(&UDPMessage::KeepAlive).unwrap();
+        let keep_alive_buffer =
+            postcard::to_vec::<UDPMessage<'_>, STUN_BUFFER_SIZE>(&UDPMessage::KeepAlive).unwrap();
         loop {
             time::sleep(time::Duration::from_secs(1)).await;
             log::trace!("Sending keep alive from {}", socket.local_addr().unwrap());
@@ -159,4 +160,54 @@ async fn punch(
     });
     // Done
     return Ok(());
+}
+
+/// Copy UDP diagrams from one socket to another bidirectionally and a timeout
+async fn forward_udp(
+    remote_socket: tokio::net::UdpSocket,
+    local_socket: tokio::net::UdpSocket,
+    remote_address: SocketAddrV4,
+    local_address: SocketAddr,
+) -> anyhow::Result<()> {
+    log::info!(
+        "Proxying from {} to {} and {} to {}",
+        remote_socket.local_addr().unwrap(),
+        remote_address,
+        local_socket.local_addr().unwrap(),
+        local_address
+    );
+    // Connect to hosts from each socket
+    remote_socket.connect(remote_address).await?;
+    local_socket.connect(local_address).await?;
+    // Wait for either sockets to get something
+    let mut buffer1 = [0; FORWARD_BUFFER_SIZE];
+    let mut buffer2 = [0; FORWARD_BUFFER_SIZE];
+    // In a loop, get the packets
+    /*
+     * BUG:
+     * However, here we can encounter a bug. What if two handlers of remote and local
+     * socket fire up at the same time? I really don't know what happens. I spoke to some
+     * of my friends and no one had any idea.
+     * I speculate that because the task is canceled, the buffer will be lost. So a packet loss
+     * is going to happen. But this does not matter because this is a UDP socket. And packet
+     * losses happen in UDP.
+     * I could have fixed it by going into the effort to spawn two tasks, one for each socket.
+     * Then continuously poll the sockets and send the result in a channel. The data in the
+     * channel won't get lost.
+     */
+    loop {
+        select! {
+            () = time::sleep(SOCKET_TIMEOUT) => {
+                log::info!("Sockets {} and {} timed out", local_address, remote_address);
+                anyhow::bail!("timeout");
+            }
+            read = remote_socket.recv(&mut buffer1) => {
+                local_socket.send(&buffer1[..read?]).await?;
+            },
+            read = local_socket.recv(&mut buffer2) => {
+                remote_socket.send(&buffer2[..read?]).await?;
+            },
+        }
+        task::yield_now().await;
+    }
 }

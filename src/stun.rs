@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     messages::{PunchError, PunchMessage, UDPMessage},
-    util::{send_udp_packet, STUN_BUFFER_SIZE},
+    util::STUN_BUFFER_SIZE,
 };
 
 const SERVERS_CLEAN_UP_INTERVAL: Duration = Duration::from_secs(60 * 10);
@@ -117,5 +117,13 @@ pub fn spawn_stun(listen: &str) -> ! {
             }
             _ => {}
         };
+    }
+}
+
+/// Sends an UDP packet from a socket to address
+fn send_udp_packet(msg: &UDPMessage, socket: &std::net::UdpSocket, addr: &SocketAddrV4) {
+    if let Ok(write_buffer) = postcard::to_vec::<&UDPMessage, STUN_BUFFER_SIZE>(&msg) {
+        // Send it
+        let _ = socket.send_to(&write_buffer, addr);
     }
 }
