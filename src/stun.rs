@@ -2,12 +2,16 @@ use postcard;
 use std::{
     collections::HashMap,
     net::{SocketAddr, SocketAddrV4, UdpSocket},
+    time::{Duration, Instant},
 };
 
 use crate::{
     messages::{PunchError, PunchMessage, UDPMessage},
     util::{send_udp_packet, STUN_BUFFER_SIZE},
 };
+
+const SERVERS_CLEAN_UP_INTERVAL: Duration = Duration::from_secs(60 * 10);
+const SLATE_SERVER: Duration = Duration::from_secs(60 * 5);
 
 /// Spawn the STUN server which connects all clients and servers together
 pub fn spawn_stun(listen: &str) -> ! {
@@ -16,11 +20,19 @@ pub fn spawn_stun(listen: &str) -> ! {
     log::info!("Listening on {}", socket.local_addr().unwrap());
     // Setup variables
     let mut buffer = [0; STUN_BUFFER_SIZE];
-    let mut servers: HashMap<String, SocketAddrV4> = HashMap::new();
+    let mut servers: HashMap<String, (SocketAddrV4, Instant)> = HashMap::new();
+    let mut last_server_cleanup = Instant::now();
     // Wait for clients and servers
     loop {
         // Read the first packet
-        let (len, addr) = socket.recv_from(&mut buffer).expect("cannot receive datagrams");
+        let (len, addr) = socket
+            .recv_from(&mut buffer)
+            .expect("cannot receive datagrams");
+        // Before doing stuff, clean up the hashmap if needed
+        if last_server_cleanup.elapsed() > SERVERS_CLEAN_UP_INTERVAL {
+            servers.retain(|_, (_, instead_date)| instead_date.elapsed() < SLATE_SERVER);
+            last_server_cleanup = Instant::now();
+        }
         // Ignore if this is IPv6
         let addr = match addr {
             SocketAddr::V4(v4) => v4,
@@ -54,7 +66,7 @@ pub fn spawn_stun(listen: &str) -> ! {
                     continue;
                 }
                 // Add it to server list
-                servers.insert(service_name.to_owned(), addr);
+                servers.insert(service_name.to_owned(), (addr, Instant::now()));
                 log::debug!("Added {} for {}", service_name, addr);
                 // Send back the success message
                 send_udp_packet(&UDPMessage::Ok, &socket, &addr);
@@ -62,7 +74,7 @@ pub fn spawn_stun(listen: &str) -> ! {
             UDPMessage::Client { service_name } => {
                 // Check if the service name exists
                 match servers.remove(service_name) {
-                    Some(server_address) => {
+                    Some((server_address, _)) => {
                         log::debug!(
                             "Matching client {} with server {} via key {}",
                             addr,
