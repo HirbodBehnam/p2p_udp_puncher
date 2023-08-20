@@ -30,6 +30,7 @@ pub fn spawn_stun(listen: &str) -> ! {
             .expect("cannot receive datagrams");
         // Before doing stuff, clean up the hashmap if needed
         if last_server_cleanup.elapsed() > SERVERS_CLEAN_UP_INTERVAL {
+            log::trace!("Cleaning up the servers map");
             servers.retain(|_, (_, instead_date)| instead_date.elapsed() < SLATE_SERVER);
             last_server_cleanup = Instant::now();
         }

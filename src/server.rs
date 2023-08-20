@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
+use std::{net::{SocketAddr, SocketAddrV4, ToSocketAddrs}, time::Duration};
 
 use anyhow::bail;
 use tokio::{net::UdpSocket, select, task, time};
@@ -7,6 +7,8 @@ use crate::{
     messages::{PunchMessage, UDPMessage},
     util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, SOCKET_TIMEOUT, STUN_BUFFER_SIZE},
 };
+
+const KEEP_ALIVE_INTERVAL: Duration = time::Duration::from_secs(1);
 
 /// Spawn a webserver which gets incoming connections from STUN server
 pub async fn spawn_server(forward: &str, stun: &str, service: &str) -> ! {
@@ -77,7 +79,7 @@ async fn stun_handshake(socket: &UdpSocket, stun: &SocketAddrV4, service: &str) 
         let keep_alive_buffer =
             postcard::to_vec::<UDPMessage<'_>, STUN_BUFFER_SIZE>(&UDPMessage::KeepAlive).unwrap();
         loop {
-            time::sleep(time::Duration::from_secs(1)).await;
+            time::sleep(KEEP_ALIVE_INTERVAL).await;
             log::trace!("Sending keep alive from {}", socket.local_addr().unwrap());
             if socket.send_to(&keep_alive_buffer, stun).await.is_err() {
                 break;
@@ -124,7 +126,7 @@ async fn punch(
     // Step 1: Punch the NAT
     let to_write_punch_buffer = postcard::to_slice(
         &UDPMessage::Punch {
-            0: PunchMessage::Peer,
+            0: PunchMessage::PeerHandshake1,
         },
         &mut punch_buffer,
     )
@@ -134,17 +136,17 @@ async fn punch(
     log::debug!("Waiting for client step 2 handshake");
     let (packet_length, _) = socket.recv_from(&mut punch_buffer).await?;
     let client_punch = postcard::from_bytes::<UDPMessage<'_>>(&punch_buffer[..packet_length])?;
-    if !matches!(client_punch, UDPMessage::Punch(PunchMessage::Peer)) {
+    if !matches!(client_punch, UDPMessage::Punch(PunchMessage::PeerHandshake2)) {
         bail!(
             "Invalid packet received from client peer: {:?}",
             client_punch
         );
     }
-    // Send back a packet
+    // Send back a packet (handshake step 3)
     log::debug!("Sending handshake step 3");
     let to_write_punch_buffer = postcard::to_slice(
         &UDPMessage::Punch {
-            0: PunchMessage::Peer,
+            0: PunchMessage::PeerHandshake3,
         },
         &mut punch_buffer,
     )

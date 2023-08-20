@@ -33,6 +33,8 @@ pub enum PunchError {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum PunchMessage {
-    Peer,
+    PeerHandshake1,
+    PeerHandshake2,
+    PeerHandshake3,
     STUN(SocketAddrV4),
 }

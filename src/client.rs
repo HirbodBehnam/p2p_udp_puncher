@@ -64,7 +64,7 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
         );
         // Send the first packet we just got
         let _ = server_socket.send(&buffer[..read_bytes]).await; // fuck errors
-        // Register the socket
+                                                                 // Register the socket
         connection_map.insert(addr, server_socket.clone());
         // Create a thread to watch incoming packets
         tokio::task::spawn(async move {
@@ -135,30 +135,46 @@ async fn punch(stun: &SocketAddrV4, service: &str) -> UdpSocket {
     }
     // Before punching, wait one second in order to let the server punch its NAT
     tokio::time::sleep(Duration::from_secs(1)).await;
-    // Now punch!
+    // Now punch! (handshake step 2)
     socket
         .connect(server_address)
         .await
         .expect("cannot do the connect to server ip");
     let write_buffer = postcard::to_slice(
         &UDPMessage::Punch {
-            0: PunchMessage::Peer,
+            0: PunchMessage::PeerHandshake2,
         },
         &mut buffer,
     )
     .unwrap();
     socket.send(write_buffer).await.expect("cannot punch");
     log::debug!("Punched own NAT");
-    // Wait for server
-    let read_bytes = socket
-        .recv(&mut buffer)
-        .await
-        .expect("cannot do third stage of punch");
-    let server_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buffer[..read_bytes]) {
-        Err(err) => die(format!("Got invalid packet from server: {}", err)),
-        Ok(pkt) => pkt,
-    };
-    if !matches!(server_punch, UDPMessage::Punch(PunchMessage::Peer)) {
+    // Wait for server]
+    loop {
+        let read_bytes = socket
+            .recv(&mut buffer)
+            .await
+            .expect("cannot do third stage of punch");
+        let server_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buffer[..read_bytes]) {
+            Err(err) => die(format!("Got invalid packet from server: {}", err)),
+            Ok(pkt) => pkt,
+        };
+        if matches!(
+            server_punch,
+            UDPMessage::Punch(PunchMessage::PeerHandshake1)
+        ) {
+            // NAT already punched
+            // ... but we need to wait for last packet from server as well
+            log::trace!("First handshake packet went through the NAT! A full-cone nat or no nat");
+            continue;
+        }
+        if matches!(
+            server_punch,
+            UDPMessage::Punch(PunchMessage::PeerHandshake3)
+        ) {
+            // Last packet
+            break;
+        }
         die(format!("Server response is not ok: {:?}", server_punch));
     }
     // Done!
