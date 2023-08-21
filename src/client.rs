@@ -5,12 +5,23 @@ use std::{
     time::Duration,
 };
 
-use tokio::net::UdpSocket;
+use parking_lot::Mutex;
+use tokio::{net::UdpSocket, sync::oneshot, time::Instant};
 
 use crate::{
     messages::{PunchMessage, UDPMessage},
     util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, STUN_BUFFER_SIZE},
 };
+
+/// Active socket is a client socket which is active and data can be sent into and from
+struct ActiveSocket {
+    /// The socket
+    socket: UdpSocket,
+    /// When was the last time we have seen something go or get into this socket
+    last_update: Mutex<Instant>,
+    /// Close this channel to shutdown the socket reader task
+    read_channel_shutdown: Mutex<Option<oneshot::Sender<()>>>,
+}
 
 /// Spawn a client which connects to a server which is punched via a STUN server
 pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
@@ -33,7 +44,7 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
     log::info!("Listening on {}", listener_socket.local_addr().unwrap());
     let mut buffer = [0; FORWARD_BUFFER_SIZE];
     // A map from remote address to outbound sockets
-    let mut connection_map: HashMap<SocketAddr, Arc<UdpSocket>> = HashMap::new();
+    let mut connection_map: HashMap<SocketAddr, Arc<ActiveSocket>> = HashMap::new();
     // In a loop wait for connections and forward them
     loop {
         // Wait for packets...
@@ -42,21 +53,29 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
             .await
             .expect("cannot read data from socket");
         // Check if this address exists in our map or not
-        if let Some(udp_socket) = connection_map.get(&addr) {
-            if let Err(err) = udp_socket.send(&buffer[..read_bytes]).await {
+        if let Some(active_socket) = connection_map.get(&addr) {
+            if let Err(err) = active_socket.socket.send(&buffer[..read_bytes]).await {
                 // Delete this entry from map
                 log::warn!(
                     "cannot send udp packet to {}: {}",
-                    udp_socket.peer_addr().unwrap(),
+                    active_socket.socket.peer_addr().unwrap(),
                     err
                 );
+                let _ = active_socket
+                    .read_channel_shutdown
+                    .lock()
+                    .take()
+                    .unwrap()
+                    .send(());
                 connection_map.remove(&addr);
+            } else {
+                *active_socket.last_update.lock() = Instant::now();
             }
             continue;
         }
         // Otherwise, we need to punch!
         log::info!("New connection from {}", addr);
-        let server_socket = Arc::new(punch(&stun_address, service).await);
+        let server_socket = punch(&stun_address, service).await;
         log::info!(
             "{} now is sending packets to {}",
             addr,
@@ -64,13 +83,19 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
         );
         // Send the first packet we just got
         let _ = server_socket.send(&buffer[..read_bytes]).await; // fuck errors
-                                                                 // Register the socket
-        connection_map.insert(addr, server_socket.clone());
+                                                                 // Create the active socket
+        let (sender, receiver) = oneshot::channel();
+        let active_socket = Arc::new(ActiveSocket {
+            socket: server_socket,
+            last_update: Mutex::new(Instant::now()),
+            read_channel_shutdown: Mutex::new(Some(sender)),
+        });
+        connection_map.insert(addr, active_socket.clone());
         // Create a thread to watch incoming packets
         tokio::task::spawn(async move {
             let mut buffer = [0; FORWARD_BUFFER_SIZE];
             loop {
-                let read = server_socket.recv(&mut buffer).await?;
+                let read = active_socket.socket.recv(&mut buffer).await?;
                 listener_socket.send_to(&buffer[..read], addr).await?;
                 tokio::task::yield_now().await;
             }
