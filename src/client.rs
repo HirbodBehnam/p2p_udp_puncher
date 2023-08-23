@@ -1,26 +1,29 @@
 use std::{
     collections::HashMap,
     net::{SocketAddr, SocketAddrV4, ToSocketAddrs},
-    sync::Arc,
-    time::Duration,
+    sync::{atomic::AtomicBool, atomic::Ordering, Arc},
+    time::{Duration, Instant},
 };
 
 use parking_lot::Mutex;
-use tokio::{net::UdpSocket, sync::oneshot, time::Instant};
+use tokio::{net::UdpSocket, select, time};
 
 use crate::{
     messages::{PunchMessage, UDPMessage},
-    util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, STUN_BUFFER_SIZE},
+    util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, SOCKET_TIMEOUT, STUN_BUFFER_SIZE},
 };
+
+use crate::defer::{defer, ScopeCall};
 
 /// Active socket is a client socket which is active and data can be sent into and from
 struct ActiveSocket {
     /// The socket
     socket: UdpSocket,
-    /// When was the last time we have seen something go or get into this socket
-    last_update: Mutex<Instant>,
-    /// Close this channel to shutdown the socket reader task
-    read_channel_shutdown: Mutex<Option<oneshot::Sender<()>>>,
+    /// When was the last time we have seen something go into this socket
+    /// (Not read, write)
+    last_write: Mutex<Instant>,
+    /// True if this socket is slate
+    slate: AtomicBool,
 }
 
 /// Spawn a client which connects to a server which is punched via a STUN server
@@ -52,8 +55,19 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
             .recv_from(&mut buffer)
             .await
             .expect("cannot read data from socket");
+        // TODO: check connection_map from time to time
         // Check if this address exists in our map or not
         if let Some(active_socket) = connection_map.get(&addr) {
+            // Check slate socket
+            if active_socket.slate.load(Ordering::Relaxed) {
+                log::info!(
+                    "Deleting slate socket {}",
+                    active_socket.socket.local_addr().unwrap()
+                );
+                connection_map.remove(&addr);
+                continue;
+            }
+            // Send data
             if let Err(err) = active_socket.socket.send(&buffer[..read_bytes]).await {
                 // Delete this entry from map
                 log::warn!(
@@ -61,15 +75,10 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
                     active_socket.socket.peer_addr().unwrap(),
                     err
                 );
-                let _ = active_socket
-                    .read_channel_shutdown
-                    .lock()
-                    .take()
-                    .unwrap()
-                    .send(());
+                active_socket.slate.store(true, Ordering::Relaxed);
                 connection_map.remove(&addr);
             } else {
-                *active_socket.last_update.lock() = Instant::now();
+                *active_socket.last_write.lock() = Instant::now();
             }
             continue;
         }
@@ -84,23 +93,39 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
         // Send the first packet we just got
         let _ = server_socket.send(&buffer[..read_bytes]).await; // fuck errors
                                                                  // Create the active socket
-        let (sender, receiver) = oneshot::channel();
         let active_socket = Arc::new(ActiveSocket {
             socket: server_socket,
-            last_update: Mutex::new(Instant::now()),
-            read_channel_shutdown: Mutex::new(Some(sender)),
+            last_write: Mutex::new(Instant::now()),
+            slate: AtomicBool::new(false),
         });
         connection_map.insert(addr, active_socket.clone());
         // Create a thread to watch incoming packets
         tokio::task::spawn(async move {
             let mut buffer = [0; FORWARD_BUFFER_SIZE];
-            loop {
-                let read = active_socket.socket.recv(&mut buffer).await?;
-                listener_socket.send_to(&buffer[..read], addr).await?;
-                tokio::task::yield_now().await;
+            defer!(active_socket.slate.store(true, Ordering::Relaxed));
+            while !active_socket.slate.load(Ordering::Relaxed) {
+                select! {
+                    // Either there is something in the socket
+                    read = active_socket.socket.recv(&mut buffer) => {
+                        let read = read?;
+                        listener_socket.send_to(&buffer[..read], addr).await?;
+                        tokio::task::yield_now().await;
+                    },
+                    // Or there is a timeout in read
+                    () = time::sleep(SOCKET_TIMEOUT) => {
+                        // However, this socket might get outgoing data... Check it
+                        if active_socket.last_write.lock().elapsed() > SOCKET_TIMEOUT {
+                            // Slate connection...
+                            log::info!("Detected slate connection {}", active_socket.socket.local_addr().unwrap());
+                            break;
+                        }
+                        // If we reach here, it means that the socket is not read in the time
+                        // but data was written to it.
+                        // So just continue!
+                    }
+                }
             }
             // Read here: https://rust-lang.github.io/async-book/07_workarounds/02_err_in_async_blocks.html
-            #[allow(unreachable_code)]
             tokio::io::Result::Ok(())
         });
     }

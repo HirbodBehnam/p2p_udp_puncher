@@ -2,6 +2,7 @@ use clap::Parser;
 
 mod arguments;
 mod client;
+mod defer;
 mod messages;
 mod server;
 mod stun;
