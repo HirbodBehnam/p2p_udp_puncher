@@ -48,6 +48,7 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
     let mut buffer = [0; FORWARD_BUFFER_SIZE];
     // A map from remote address to outbound sockets
     let mut connection_map: HashMap<SocketAddr, Arc<ActiveSocket>> = HashMap::new();
+    let mut last_connection_map_cleanup = Instant::now();
     // In a loop wait for connections and forward them
     loop {
         // Wait for packets...
@@ -55,7 +56,12 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
             .recv_from(&mut buffer)
             .await
             .expect("cannot read data from socket");
-        // TODO: check connection_map from time to time
+        // Check connection_map from time to time
+        if last_connection_map_cleanup.elapsed() > SOCKET_TIMEOUT {
+            log::trace!("Cleaning up the servers map");
+            connection_map.retain(|_, conn| !conn.slate.load(Ordering::Relaxed));
+            last_connection_map_cleanup = Instant::now();
+        }
         // Check if this address exists in our map or not
         if let Some(active_socket) = connection_map.get(&addr) {
             // Check slate socket
