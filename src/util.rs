@@ -1,7 +1,7 @@
 use std::{fmt, net::SocketAddrV4, time::Duration};
 
-/// Size of buffer of network sockets for connecting to STUN server
-pub const STUN_BUFFER_SIZE: usize = 128;
+/// Size of buffer of network sockets for connecting to TURN server
+pub const TURN_BUFFER_SIZE: usize = 128;
 
 /// Local address on which we should bind in order to open the UDP socket as client
 pub const LOCAL_UDP_BIND_ADDRESS: SocketAddrV4 =

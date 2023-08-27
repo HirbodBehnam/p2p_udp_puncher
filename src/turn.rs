@@ -7,19 +7,19 @@ use std::{
 
 use crate::{
     messages::{PunchError, PunchMessage, UDPMessage},
-    util::STUN_BUFFER_SIZE,
+    util::TURN_BUFFER_SIZE,
 };
 
 const SERVERS_CLEAN_UP_INTERVAL: Duration = Duration::from_secs(60 * 10);
 const SLATE_SERVER: Duration = Duration::from_secs(60 * 5);
 
-/// Spawn the STUN server which connects all clients and servers together
-pub fn spawn_stun(listen: &str) -> ! {
+/// Spawn the TURN server which connects all clients and servers together
+pub fn spawn_turn(listen: &str) -> ! {
     // Bind on address
     let socket = UdpSocket::bind(listen).expect("cannot bind UDP socket");
     log::info!("Listening on {}", socket.local_addr().unwrap());
     // Setup variables
-    let mut buffer = [0; STUN_BUFFER_SIZE];
+    let mut buffer = [0; TURN_BUFFER_SIZE];
     let mut servers: HashMap<String, (SocketAddrV4, Instant)> = HashMap::new();
     let mut last_server_cleanup = Instant::now();
     // Wait for clients and servers
@@ -85,7 +85,7 @@ pub fn spawn_stun(listen: &str) -> ! {
                         // Send message to server
                         send_udp_packet(
                             &UDPMessage::Punch {
-                                0: PunchMessage::STUN { 0: addr },
+                                0: PunchMessage::TURN { 0: addr },
                             },
                             &socket,
                             &server_address,
@@ -93,7 +93,7 @@ pub fn spawn_stun(listen: &str) -> ! {
                         // Send message to client
                         send_udp_packet(
                             &UDPMessage::Punch {
-                                0: PunchMessage::STUN { 0: server_address },
+                                0: PunchMessage::TURN { 0: server_address },
                             },
                             &socket,
                             &addr,
@@ -123,7 +123,7 @@ pub fn spawn_stun(listen: &str) -> ! {
 
 /// Sends an UDP packet from a socket to address
 fn send_udp_packet(msg: &UDPMessage, socket: &std::net::UdpSocket, addr: &SocketAddrV4) {
-    if let Ok(write_buffer) = postcard::to_vec::<&UDPMessage, STUN_BUFFER_SIZE>(&msg) {
+    if let Ok(write_buffer) = postcard::to_vec::<&UDPMessage, TURN_BUFFER_SIZE>(&msg) {
         // Send it
         let _ = socket.send_to(&write_buffer, addr);
     }

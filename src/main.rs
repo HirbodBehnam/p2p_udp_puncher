@@ -5,7 +5,7 @@ mod client;
 mod defer;
 mod messages;
 mod server;
-mod stun;
+mod turn;
 mod util;
 
 fn main() {
@@ -14,28 +14,28 @@ fn main() {
     match arguments::Cli::parse().command {
         arguments::Commands::Server {
             forward,
-            stun,
+            turn,
             service,
         } => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap()
             .block_on(async {
-                server::spawn_server(&forward, &stun, &service).await;
+                server::spawn_server(&forward, &turn, &service).await;
             }),
         arguments::Commands::Client {
             listen,
-            stun,
+            turn,
             service,
         } => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap()
             .block_on(async {
-                client::spawn_client(&listen, &stun, &service).await;
+                client::spawn_client(&listen, &turn, &service).await;
             }),
-        arguments::Commands::STUN { listen } => {
-            stun::spawn_stun(&listen);
+        arguments::Commands::TURN { listen } => {
+            turn::spawn_turn(&listen);
         }
     };
 }

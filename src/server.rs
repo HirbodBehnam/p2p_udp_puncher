@@ -5,29 +5,29 @@ use tokio::{net::UdpSocket, select, task, time};
 
 use crate::{
     messages::{PunchMessage, UDPMessage},
-    util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, SOCKET_TIMEOUT, STUN_BUFFER_SIZE},
+    util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, SOCKET_TIMEOUT, TURN_BUFFER_SIZE},
 };
 
 const KEEP_ALIVE_INTERVAL: Duration = time::Duration::from_secs(1);
 
-/// Spawn a webserver which gets incoming connections from STUN server
-pub async fn spawn_server(forward: &str, stun: &str, service: &str) -> ! {
+/// Spawn a webserver which gets incoming connections from TURN server
+pub async fn spawn_server(forward: &str, turn: &str, service: &str) -> ! {
     // Parse socket addresses
     let forward_address = forward
         .to_socket_addrs()
         .expect("cannot parse forward address")
         .next()
         .expect("cannot parse forward address");
-    let stun_address = stun
+    let turn_address = turn
         .to_socket_addrs()
-        .expect("cannot parse STUN address")
+        .expect("cannot parse TURN address")
         .next()
-        .expect("cannot parse STUN address");
-    let stun_address = match stun_address {
+        .expect("cannot parse TURN address");
+    let turn_address = match turn_address {
         SocketAddr::V4(v4) => v4,
-        SocketAddr::V6(_) => die("stun address cannot be IPv6"),
+        SocketAddr::V6(_) => die("TURN address cannot be IPv6"),
     };
-    // In a loop, we must connect to STUN server and advertise ourselves
+    // In a loop, we must connect to TURN server and advertise ourselves
     loop {
         // Spawn a client
         let socket = match UdpSocket::bind(LOCAL_UDP_BIND_ADDRESS).await {
@@ -35,8 +35,8 @@ pub async fn spawn_server(forward: &str, stun: &str, service: &str) -> ! {
             Err(err) => die(err),
         };
         log::debug!("Started a socket on {}", socket.local_addr().unwrap());
-        // Connect to stun server and get the client address
-        let client_addr = stun_handshake(&socket, &stun_address, service).await;
+        // Connect to TURN server and get the client address
+        let client_addr = turn_handshake(&socket, &turn_address, service).await;
         // Now punch!
         tokio::task::spawn(async move {
             if let Err(err) = punch(socket, client_addr, forward_address).await {
@@ -46,8 +46,8 @@ pub async fn spawn_server(forward: &str, stun: &str, service: &str) -> ! {
     }
 }
 
-async fn stun_handshake(socket: &UdpSocket, stun: &SocketAddrV4, service: &str) -> SocketAddrV4 {
-    let mut buf = [0; STUN_BUFFER_SIZE];
+async fn turn_handshake(socket: &UdpSocket, turn: &SocketAddrV4, service: &str) -> SocketAddrV4 {
+    let mut buf = [0; TURN_BUFFER_SIZE];
     // Send server hello
     log::debug!("Sending server hello");
     let write_buffer = postcard::to_slice(
@@ -57,19 +57,19 @@ async fn stun_handshake(socket: &UdpSocket, stun: &SocketAddrV4, service: &str) 
         &mut buf,
     )
     .unwrap();
-    socket.send_to(&write_buffer, stun).await.unwrap();
+    socket.send_to(&write_buffer, turn).await.unwrap();
     // Get the answer
-    log::debug!("Waiting for STUN ack");
+    log::debug!("Waiting for TURN ack");
     let (read_len, _) = socket.recv_from(&mut buf).await.unwrap();
-    let stun_ack = match postcard::from_bytes::<UDPMessage<'_>>(&buf[..read_len]) {
-        Err(err) => die(format!("Got invalid packet from STUN server: {}", err)),
+    let turn_ack = match postcard::from_bytes::<UDPMessage<'_>>(&buf[..read_len]) {
+        Err(err) => die(format!("Got invalid packet from TURN server: {}", err)),
         Ok(pkt) => pkt,
     };
     // Check status
-    if !matches!(stun_ack, UDPMessage::Ok) {
+    if !matches!(turn_ack, UDPMessage::Ok) {
         die(format!(
-            "Got non successful ack packet from STUN server: {:?}",
-            stun_ack
+            "Got non successful ack packet from TURN server: {:?}",
+            turn_ack
         ));
     }
     log::info!("Server registered {}", socket.local_addr().unwrap());
@@ -77,38 +77,38 @@ async fn stun_handshake(socket: &UdpSocket, stun: &SocketAddrV4, service: &str) 
     // This method should never return
     let keep_alive = async {
         let keep_alive_buffer =
-            postcard::to_vec::<UDPMessage<'_>, STUN_BUFFER_SIZE>(&UDPMessage::KeepAlive).unwrap();
+            postcard::to_vec::<UDPMessage<'_>, TURN_BUFFER_SIZE>(&UDPMessage::KeepAlive).unwrap();
         loop {
             time::sleep(KEEP_ALIVE_INTERVAL).await;
             log::trace!("Sending keep alive from {}", socket.local_addr().unwrap());
-            if socket.send_to(&keep_alive_buffer, stun).await.is_err() {
+            if socket.send_to(&keep_alive_buffer, turn).await.is_err() {
                 break;
             }
         }
     };
     // Wait for punch and poll the keep alive
-    let stun_punch;
+    let turn_punch;
     select! {
         () = keep_alive => unreachable!(),
         recv_result = socket.recv_from(&mut buf) => {
             let (read_len, _) = recv_result.unwrap();
-            stun_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buf[..read_len]) {
-                Err(err) => die(format!("Got invalid packet from STUN server: {}", err)),
+            turn_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buf[..read_len]) {
+                Err(err) => die(format!("Got invalid packet from TURN server: {}", err)),
                 Ok(pkt) => pkt,
             };
         },
     };
     // Parse packet
-    if let UDPMessage::Punch(p) = &stun_punch {
-        if let PunchMessage::STUN(other) = &p {
+    if let UDPMessage::Punch(p) = &turn_punch {
+        if let PunchMessage::TURN(other) = &p {
             log::info!("Client peer is {}", other);
             return *other;
         }
     }
     // Something went south
     die(format!(
-        "Got invalid packet from STUN server while waiting for client: {:?}",
-        stun_punch
+        "Got invalid packet from TURN server while waiting for client: {:?}",
+        turn_punch
     ));
 }
 

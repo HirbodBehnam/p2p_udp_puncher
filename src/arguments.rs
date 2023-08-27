@@ -16,8 +16,8 @@ pub enum Commands {
     Server {
         /// Where should data be forwarded
         forward: String,
-        /// The address of remote server
-        stun: String,
+        /// The address of TURN server
+        turn: String,
         /// The name of current service
         service: String,
     },
@@ -26,14 +26,14 @@ pub enum Commands {
     Client {
         /// Listen on this address
         listen: String,
-        /// The address of remote server
-        stun: String,
+        /// The address of TURN server
+        turn: String,
         /// The name of current service
         service: String,
     },
-    /// Work as stun server
+    /// Work as TURN server
     #[command(arg_required_else_help = true)]
-    STUN {
+    TURN {
         /// Listen on this address
         listen: String,
     },

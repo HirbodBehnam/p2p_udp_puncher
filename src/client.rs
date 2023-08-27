@@ -10,7 +10,7 @@ use tokio::{net::UdpSocket, select, time};
 
 use crate::{
     messages::{PunchMessage, UDPMessage},
-    util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, SOCKET_TIMEOUT, STUN_BUFFER_SIZE},
+    util::{die, FORWARD_BUFFER_SIZE, LOCAL_UDP_BIND_ADDRESS, SOCKET_TIMEOUT, TURN_BUFFER_SIZE},
 };
 
 use crate::defer::{defer, ScopeCall};
@@ -26,17 +26,17 @@ struct ActiveSocket {
     slate: AtomicBool,
 }
 
-/// Spawn a client which connects to a server which is punched via a STUN server
-pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
+/// Spawn a client which connects to a server which is punched via a TURN server
+pub async fn spawn_client(listen: &str, turn: &str, service: &str) -> ! {
     // Parse socket addresses
-    let stun_address = stun
+    let turn_address = turn
         .to_socket_addrs()
-        .expect("cannot parse STUN address")
+        .expect("cannot parse TURN address")
         .next()
-        .expect("cannot parse STUN address");
-    let stun_address = match stun_address {
+        .expect("cannot parse TURN address");
+    let turn_address = match turn_address {
         SocketAddr::V4(v4) => v4,
-        SocketAddr::V6(_) => die("stun address cannot be IPv6"),
+        SocketAddr::V6(_) => die("TURN address cannot be IPv6"),
     };
     // Listen for incoming connections. We leak this socket because its open until the end of program
     let listener_socket: &'static UdpSocket = Box::leak(Box::new(
@@ -90,7 +90,7 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
         }
         // Otherwise, we need to punch!
         log::info!("New connection from {}", addr);
-        let server_socket = punch(&stun_address, service).await;
+        let server_socket = punch(&turn_address, service).await;
         log::info!(
             "{} now is sending packets to {}",
             addr,
@@ -137,14 +137,14 @@ pub async fn spawn_client(listen: &str, stun: &str, service: &str) -> ! {
     }
 }
 
-async fn punch(stun: &SocketAddrV4, service: &str) -> UdpSocket {
-    let mut buffer = [0; STUN_BUFFER_SIZE];
+async fn punch(turn: &SocketAddrV4, service: &str) -> UdpSocket {
+    let mut buffer = [0; TURN_BUFFER_SIZE];
     // At first create a socket
     let socket = UdpSocket::bind(LOCAL_UDP_BIND_ADDRESS)
         .await
         .expect("Cannot bind new socket");
     log::debug!("Bound local socket on {}", socket.local_addr().unwrap());
-    // Now send the STUN hello to server.
+    // Now send the TURN hello to server.
     // Server might not be ready. In this case we implement a retry mechanism.
     let server_address: SocketAddrV4;
     let mut retry_counter = 0;
@@ -157,21 +157,21 @@ async fn punch(stun: &SocketAddrV4, service: &str) -> UdpSocket {
         )
         .unwrap();
         socket
-            .send_to(write_buffer, stun)
+            .send_to(write_buffer, turn)
             .await
-            .expect("Cannot send STUN hello to STUN server");
+            .expect("Cannot send TURN hello to TURN server");
         // This should send back either server address or a error which server does exists (yet)
         let (read_bytes, _) = socket
             .recv_from(&mut buffer)
             .await
-            .expect("Cannot get STUN hello answer");
-        let stun_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buffer[..read_bytes]) {
-            Err(err) => die(format!("Got invalid packet from STUN server: {}", err)),
+            .expect("Cannot get TURN hello answer");
+        let turn_punch = match postcard::from_bytes::<UDPMessage<'_>>(&buffer[..read_bytes]) {
+            Err(err) => die(format!("Got invalid packet from TURN server: {}", err)),
             Ok(pkt) => pkt,
         };
         // Check status
-        if let UDPMessage::Punch(p) = stun_punch {
-            if let PunchMessage::STUN(peer) = p {
+        if let UDPMessage::Punch(p) = turn_punch {
+            if let PunchMessage::TURN(peer) = p {
                 log::info!("Got {} as server address", peer);
                 server_address = peer;
                 break;
@@ -179,8 +179,8 @@ async fn punch(stun: &SocketAddrV4, service: &str) -> UdpSocket {
         }
         // Fuck up. Retry
         log::warn!(
-            "Cannot get the server address from STUN server. Got {:?}",
-            stun_punch
+            "Cannot get the server address from TURN server. Got {:?}",
+            turn_punch
         );
         if retry_counter == 5 {
             die("Out of reties. RIP");

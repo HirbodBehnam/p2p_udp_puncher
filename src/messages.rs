@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 /// All possible messages which can be sent from or to all apps
 #[derive(Serialize, Deserialize, Debug)]
 pub enum UDPMessage<'a> {
-    /// Client wants to connect to STUN server
+    /// Client wants to connect to TURN server
     Client {
         service_name: &'a str,
     },
-    /// Server advertising itself to STUN server
+    /// Server advertising itself to TURN server
     Server {
         service_name: &'a str,
     },
@@ -36,5 +36,5 @@ pub enum PunchMessage {
     PeerHandshake1,
     PeerHandshake2,
     PeerHandshake3,
-    STUN(SocketAddrV4),
+    TURN(SocketAddrV4),
 }
